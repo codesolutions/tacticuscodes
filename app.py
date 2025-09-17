@@ -58,7 +58,7 @@ logging.info("Configuration loaded successfully")
 # Reddit API Configuration
 REDDIT_CLIENT_ID = config['reddit']['client_id']
 REDDIT_CLIENT_SECRET = config['reddit']['client_secret']
-SUBREDDIT_NAME = config['reddit']['subreddit']
+SUBREDDITS_CONFIG = config['reddit']['subreddits']
 USER_AGENT = config['reddit']['user_agent']
 
 # Application Configuration
@@ -78,8 +78,8 @@ LOG_FILE = os.path.join(
 # Notification Configuration
 NTFY_TOPIC_URL = config['notifications']['ntfy_topic_url']
 
-# --- Reddit Flair Filtering ---
-ALLOWED_FLAIRS = set(config['filtering']['allowed_flairs'])
+# --- Filtering Configuration ---
+TRUSTED_USERS = set(config['filtering']['trusted_users'])
 
 # --- Patterns ---
 CANDIDATE_CODE_PATTERN = re.compile(config['patterns']['candidate_code_pattern'])
@@ -196,18 +196,23 @@ def initialize_reddit_client():
         return None
 
 def fetch_and_process_posts_praw(notified_codes_set):
-    """Fetches new posts from Reddit using PRAW API."""
+    """Fetches new posts from multiple subreddits using PRAW API."""
     reddit = initialize_reddit_client()
     if reddit is None:
         logging.error("Cannot initialize Reddit client")
         return None
     
-    logging.info(f"Fetching new posts from r/{SUBREDDIT_NAME} using Reddit API...")
+    all_posts = []
+    subreddit_names = list(SUBREDDITS_CONFIG.keys())
+    logging.info(f"Fetching new posts from r/{'+'.join(subreddit_names)} using Reddit API...")
     
     try:
-        subreddit = reddit.subreddit(SUBREDDIT_NAME)
+        # Create a multireddit by joining subreddit names with '+'
+        multireddit_name = '+'.join(subreddit_names)
+        multireddit = reddit.subreddit(multireddit_name)
+        
         # Fetch new posts with the specified limit
-        posts = list(subreddit.new(limit=POST_LIMIT))
+        posts = list(multireddit.new(limit=POST_LIMIT))
         logging.info(f"Successfully fetched {len(posts)} posts from Reddit API")
         return posts
     except Exception as e:
@@ -215,30 +220,45 @@ def fetch_and_process_posts_praw(notified_codes_set):
         return None
 
 def fetch_and_process_posts_requests(notified_codes_set):
-    """Fallback method: Fetches new posts using direct JSON requests."""
+    """Fallback method: Fetches new posts from multiple subreddits using direct JSON requests."""
     import json
-    reddit_url = f"https://www.reddit.com/r/{SUBREDDIT_NAME}/new.json"
+    
+    all_posts = []
+    subreddit_names = list(SUBREDDITS_CONFIG.keys())
     headers = {'User-Agent': USER_AGENT}
     params = {'limit': POST_LIMIT}
     
-    logging.info(f"Fetching new posts from {reddit_url} using requests fallback...")
-    try:
-        response = requests.get(reddit_url, headers=headers, params=params, timeout=15)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching Reddit data via requests: {e}")
-        return None
-
-    try:
-        posts_data = response.json()
-        if 'data' not in posts_data or 'children' not in posts_data['data']:
-            logging.error("Reddit JSON data is not in the expected format.")
-            return None
-        posts = posts_data['data']['children']
-        logging.info(f"Successfully fetched {len(posts)} posts via requests fallback")
-        return posts
-    except json.JSONDecodeError as e:
-        logging.error(f"Error decoding Reddit JSON response: {e}")
+    logging.info(f"Fetching new posts from r/{'+'.join(subreddit_names)} using requests fallback...")
+    
+    # Fetch from each subreddit separately since multireddit via JSON is more complex
+    for subreddit_name in subreddit_names:
+        reddit_url = f"https://www.reddit.com/r/{subreddit_name}/new.json"
+        
+        try:
+            response = requests.get(reddit_url, headers=headers, params=params, timeout=15)
+            response.raise_for_status()
+            
+            posts_data = response.json()
+            if 'data' not in posts_data or 'children' not in posts_data['data']:
+                logging.warning(f"Invalid JSON data format for r/{subreddit_name}")
+                continue
+                
+            subreddit_posts = posts_data['data']['children']
+            all_posts.extend(subreddit_posts)
+            logging.debug(f"Fetched {len(subreddit_posts)} posts from r/{subreddit_name}")
+            
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error fetching from r/{subreddit_name}: {e}")
+            continue
+        except json.JSONDecodeError as e:
+            logging.error(f"Error decoding JSON from r/{subreddit_name}: {e}")
+            continue
+    
+    if all_posts:
+        logging.info(f"Successfully fetched {len(all_posts)} total posts via requests fallback")
+        return all_posts
+    else:
+        logging.error("Failed to fetch posts from any subreddit")
         return None
 
 def fetch_and_process_posts(notified_codes_set):
@@ -265,6 +285,7 @@ def fetch_and_process_posts(notified_codes_set):
             return notified_codes_set
 
     all_potential_codes_this_run = []
+    trusted_codes_this_run = []
     processed_post_count = 0
 
     for post_item in posts:
@@ -274,6 +295,8 @@ def fetch_and_process_posts(notified_codes_set):
             title = post_item.title
             flair = post_item.link_flair_text  # Can be None
             selftext = post_item.selftext if post_item.selftext else ''
+            author = post_item.author.name if post_item.author else '[deleted]'
+            subreddit_name = post_item.subreddit.display_name
         else:
             # Requests JSON data
             if post_item.get('kind') != 't3':
@@ -283,13 +306,21 @@ def fetch_and_process_posts(notified_codes_set):
             title = post_data.get('title', '')
             flair = post_data.get('link_flair_text')  # Can be None
             selftext = post_data.get('selftext', '')
+            author = post_data.get('author', '[deleted]')
+            subreddit_name = post_data.get('subreddit', 'unknown')
 
-        # --- FLAIR FILTERING LOGIC ---
-        if flair not in ALLOWED_FLAIRS:
-            logging.debug(f"Skipping Post ID: {post_id} due to invalid flair: '{flair}'")
+        # --- SUBREDDIT-SPECIFIC FLAIR FILTERING ---
+        if subreddit_name in SUBREDDITS_CONFIG:
+            allowed_flairs = SUBREDDITS_CONFIG[subreddit_name]['allowed_flairs']
+            # If allowed_flairs is empty, allow all flairs for this subreddit
+            if allowed_flairs and flair not in allowed_flairs:
+                logging.debug(f"Skipping Post ID: {post_id} from r/{subreddit_name} due to invalid flair: '{flair}'")
+                continue
+        else:
+            logging.debug(f"Skipping Post ID: {post_id} from unknown subreddit: '{subreddit_name}'")
             continue
 
-        #logging.info(f"Processing Post ID: {post_id} with flair '{flair}', Title: '{title[:50]}...'")
+        #logging.info(f"Processing Post ID: {post_id} from r/{subreddit_name} by u/{author} with flair '{flair}', Title: '{title[:50]}...'")
         processed_post_count += 1
         
         current_post_extracted_codes = []
@@ -319,28 +350,46 @@ def fetch_and_process_posts(notified_codes_set):
             else:
                 logging.debug(f"No codes in title of post {post_id} and no strong hint to check body.")
 
-        # Add unique codes found in this specific post to the list for frequency counting.
+        # Add unique codes found in this specific post to the appropriate list
         for code in set(current_post_extracted_codes):
-            all_potential_codes_this_run.append(code)
+            if author in TRUSTED_USERS:
+                # Codes from trusted users are immediately trusted
+                trusted_codes_this_run.append(code)
+                logging.debug(f"Code {code} from trusted user u/{author} - immediate trust")
+            else:
+                # Regular codes need confirmation
+                all_potential_codes_this_run.append(code)
 
     logging.info(f"Processed {processed_post_count} posts with allowed flairs.")
 
-    if not all_potential_codes_this_run:
-        logging.info("No potential codes found in the processed posts.")
-        return notified_codes_set
-
-    code_counts = collections.Counter(all_potential_codes_this_run)
-    logging.info(f"Potential code counts this run: {code_counts}")
-
+    # Process trusted codes first (immediate notification)
     newly_confirmed_codes = []
-    for code, count in code_counts.items():
-        if count >= 2 and code not in notified_codes_set:
-            logging.info(f"Confirmed new code: {code} (count: {count})")
-            newly_confirmed_codes.append(code)
-        elif code in notified_codes_set:
-            logging.debug(f"Code {code} already notified.")
-        elif count < 2:
-            logging.debug(f"Code {code} appeared only {count} time(s), not enough for confirmation.")
+    if trusted_codes_this_run:
+        unique_trusted_codes = set(trusted_codes_this_run)
+        for code in unique_trusted_codes:
+            if code not in notified_codes_set:
+                logging.info(f"Trusted code from reliable user: {code}")
+                newly_confirmed_codes.append(code)
+            else:
+                logging.debug(f"Trusted code {code} already notified.")
+    
+    # Process regular codes (need confirmation count >= 2)
+    if all_potential_codes_this_run:
+        code_counts = collections.Counter(all_potential_codes_this_run)
+        logging.info(f"Regular code counts this run: {code_counts}")
+        
+        for code, count in code_counts.items():
+            if count >= 2 and code not in notified_codes_set:
+                logging.info(f"Confirmed new code: {code} (count: {count})")
+                newly_confirmed_codes.append(code)
+            elif code in notified_codes_set:
+                logging.debug(f"Code {code} already notified.")
+            elif count < 2:
+                logging.debug(f"Code {code} appeared only {count} time(s), not enough for confirmation.")
+    
+    if not newly_confirmed_codes and not trusted_codes_this_run:
+        logging.info("No new codes found in the processed posts.")
+        return notified_codes_set
 
     if newly_confirmed_codes:
         newly_confirmed_codes.sort()
@@ -357,9 +406,16 @@ def fetch_and_process_posts(notified_codes_set):
 
 # --- Main Execution ---
 if __name__ == "__main__":
+    subreddit_names = list(SUBREDDITS_CONFIG.keys())
     logging.info("Tacticus Code Scraper started (using Reddit API via PRAW).")
-    logging.info(f"Filtering for flairs: {ALLOWED_FLAIRS}")
-    logging.info(f"Target subreddit: r/{SUBREDDIT_NAME}")
+    logging.info(f"Monitoring subreddits: r/{', r/'.join(subreddit_names)}")
+    logging.info(f"Trusted users: {', '.join(TRUSTED_USERS) if TRUSTED_USERS else 'None'}")
+    for subreddit, config in SUBREDDITS_CONFIG.items():
+        flairs = config['allowed_flairs']
+        if flairs:
+            logging.info(f"r/{subreddit} - Allowed flairs: {flairs}")
+        else:
+            logging.info(f"r/{subreddit} - All flairs allowed")
     
     try:
         with open(CODES_FILE, 'a'):

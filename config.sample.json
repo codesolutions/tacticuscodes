@@ -2,7 +2,14 @@
     "reddit": {
         "client_id": "",
         "client_secret": "",
-        "subreddit": "Tacticus_Codes",
+        "subreddits": {
+            "Tacticus_Codes": {
+                "allowed_flairs": ["Codes + Referral ", "New Code"]
+            },
+            "WH40K_Tacticus_Codes": {
+                "allowed_flairs": []
+            }
+        },
         "user_agent": "TacticusCodeBot/0.3 by RedditUser[YOURUSERNAME] (Python Script with PRAW)"
     },
     "application": {
@@ -15,7 +22,7 @@
         "ntfy_topic_url": "ntfy.sh/tacticus_codes"
     },
     "filtering": {
-        "allowed_flairs": ["Codes + Referral ", "New Code"],
+        "trusted_users": [],
         "ignored_words": ["NEW", "CODE", "CODES", "REFERRAL"]
     },
     "patterns": {

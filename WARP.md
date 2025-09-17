@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-The Tacticus Code Scraper is a Python application that monitors the r/Tacticus_Codes subreddit for new game codes and sends notifications via ntfy.sh and desktop notifications. The application scrapes Reddit posts, extracts potential codes using pattern matching, and confirms codes that appear multiple times across posts to reduce false positives.
+The Tacticus Code Scraper is a Python application that monitors multiple Reddit subreddits for new game codes and sends notifications via ntfy.sh and desktop notifications. The application scrapes Reddit posts from r/Tacticus_Codes and r/WH40K_Tacticus_Codes, extracts potential codes using pattern matching, and confirms codes through multiple sources or trusted users to reduce false positives.
 
 ## Development Commands
 
@@ -45,12 +45,13 @@ python3 -c "from app import *; notified_codes = load_notified_codes(); fetch_and
 ## Architecture and Key Components
 
 ### Core Logic Flow
-1. **Reddit API Integration**: Attempts to fetch posts using PRAW (Python Reddit API Wrapper) with API credentials, automatically falls back to direct JSON requests if API access fails
-2. **Flair Filtering**: Only processes posts with specific flairs ("Codes + Referral ", "New Code")
-3. **Code Extraction**: Uses regex patterns to find alphanumeric codes (3-25 chars) in titles and post bodies
-4. **Code Validation**: Requires codes to appear in 2+ posts to be considered valid (reduces false positives)
-5. **Dual Notifications**: Sends via ntfy.sh web service and desktop notify-send
-6. **State Persistence**: Tracks notified codes in `notified_codes.txt` to prevent duplicates
+1. **Multi-Subreddit Integration**: Monitors r/Tacticus_Codes and r/WH40K_Tacticus_Codes simultaneously using PRAW multireddit functionality, with automatic fallback to individual subreddit requests
+2. **Flexible Flair Filtering**: Applies subreddit-specific flair rules (r/Tacticus_Codes has specific allowed flairs, r/WH40K_Tacticus_Codes allows all flairs)
+3. **Trusted User System**: Codes from trusted users (Traditional-Key6002, xShadow_Starx, No_Eggplant8884) are immediately accepted without requiring confirmation
+4. **Code Extraction**: Uses regex patterns to find alphanumeric codes (3-25 chars) in titles and post bodies
+5. **Dual Validation System**: Regular codes require 2+ confirmations, trusted user codes are immediately valid
+6. **Dual Notifications**: Sends via ntfy.sh web service and desktop notify-send
+7. **State Persistence**: Tracks notified codes in `notified_codes.txt` to prevent duplicates
 
 ### Pattern Matching System
 - **Candidate codes**: `r'\b[A-Z0-9]{3,25}\b'` - finds potential codes
@@ -66,7 +67,14 @@ All settings are now stored in `config.json`. The application loads this file at
     "reddit": {
         "client_id": "your_reddit_client_id",
         "client_secret": "your_reddit_client_secret",
-        "subreddit": "Tacticus_Codes",
+        "subreddits": {
+            "Tacticus_Codes": {
+                "allowed_flairs": ["Codes + Referral ", "New Code"]
+            },
+            "WH40K_Tacticus_Codes": {
+                "allowed_flairs": []
+            }
+        },
         "user_agent": "TacticusCodeBot/0.3 by RedditUserJoekki (Python Script with PRAW)"
     },
     "application": {
@@ -79,7 +87,7 @@ All settings are now stored in `config.json`. The application loads this file at
         "ntfy_topic_url": "ntfy.sh/tacticus_codes"
     },
     "filtering": {
-        "allowed_flairs": ["Codes + Referral ", "New Code"],
+        "trusted_users": ["Traditional-Key6002", "xShadow_Starx", "No_Eggplant8884"],
         "ignored_words": ["NEW", "CODE", "CODES", "REFERRAL"]
     },
     "patterns": {
@@ -91,10 +99,10 @@ All settings are now stored in `config.json`. The application loads this file at
 
 ### Configuration Validation
 The application validates that all required configuration sections are present:
-- `reddit`: API credentials and subreddit settings
+- `reddit`: API credentials and subreddit settings with individual flair rules
 - `application`: Runtime behavior settings
 - `notifications`: Notification service configuration
-- `filtering`: Content filtering rules
+- `filtering`: Content filtering rules and trusted user list
 - `patterns`: Regex patterns for code detection
 
 ### State Files
@@ -130,7 +138,10 @@ To modify code detection, update the regex patterns in the `config.json` file un
 The `notify_ntfy()` function handles both web and desktop notifications. To add new notification methods, extend this function or create additional notification functions.
 
 ### Flair Management
-Update the `filtering.allowed_flairs` array in `config.json` to change which Reddit post flairs are processed. Note the trailing space in "Codes + Referral " is intentional.
+Update the `reddit.subreddits.[subreddit_name].allowed_flairs` array in `config.json` to change which Reddit post flairs are processed for each subreddit. If the array is empty, all flairs are allowed for that subreddit. Note the trailing space in "Codes + Referral " is intentional.
+
+### Trusted Users
+Update the `filtering.trusted_users` array in `config.json` to add or remove users whose codes are immediately trusted without requiring confirmation from multiple sources. This is useful for reliable community members who consistently post valid codes.
 
 ### Logging Configuration
 Logging uses Python's standard logging module with both file and console handlers. The log file path is configured in `config.json` under `application.log_file`. To adjust log levels or formats, modify the `logging.basicConfig()` call in `app.py`.

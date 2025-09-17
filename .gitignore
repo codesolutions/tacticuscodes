@@ -1,0 +1,6 @@
+.venv
+__pycache__
+code_scraper.log
+code_scraper.txt
+config.json
+notified_codes.txt
