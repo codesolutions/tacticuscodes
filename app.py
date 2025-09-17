@@ -427,10 +427,10 @@ if __name__ == "__main__":
     logging.info(f"Loaded {len(current_notified_codes)} previously notified codes.")
 
     try:
-        while True:
-            current_notified_codes = fetch_and_process_posts(current_notified_codes)
-            logging.info(f"Next check in {FETCH_INTERVAL_SECONDS} seconds.")
-            time.sleep(FETCH_INTERVAL_SECONDS)
+        #while True:
+        current_notified_codes = fetch_and_process_posts(current_notified_codes)
+        #logging.info(f"Next check in {FETCH_INTERVAL_SECONDS} seconds.")
+        #time.sleep(FETCH_INTERVAL_SECONDS)
     except KeyboardInterrupt:
         logging.info("Script interrupted by user. Exiting.")
     except Exception as e:
