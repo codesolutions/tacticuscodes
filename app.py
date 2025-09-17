@@ -99,8 +99,7 @@ logging.basicConfig(
     handlers=[
         logging.FileHandler(LOG_FILE),
         logging.StreamHandler()
-    ],
-    force=True
+    ]
 )
 
 # Patterns for titles that suggest the code is in the post body
