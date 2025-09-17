@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import praw
 import requests
 import re
 import time
@@ -11,38 +12,36 @@ import json
 
 
 
-# --- Configuration ---
-REDDIT_URL = "https://www.reddit.com/r/Tacticus_Codes/new.json"
-NTFY_TOPIC_URL = "ntfy.sh/tacticus_codes" # User specified topic
-CODES_FILE = os.path.join(
-    os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
-    "notified_codes.txt"
-)
-LOG_FILE = os.path.join(
-    os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
-    "code_scraper.txt"
-)
-USER_AGENT = "TacticusCodeBot/0.2 by RedditUserJoekki (Python Script)" # PLEASE UPDATE YourNameHere
-FETCH_INTERVAL_SECONDS = 300  # 5 minutes
-POST_LIMIT = 40  # Number of new posts to fetch each time, increased to account for flair filtering
-
-# --- Reddit Flair Filtering ---
-# Only posts with these flairs will be processed. Note the trailing space in the first one.
-ALLOWED_FLAIRS = {"Codes + Referral ", "New Code"}
-
-# --- Patterns ---
-# Pattern for potential codes: 4-25 alphanumeric characters, often all caps.
-# Will be converted to uppercase and then checked.
-CANDIDATE_CODE_PATTERN = re.compile(r'\b[A-Z0-9]{3,25}\b')
-# Pattern for referral codes (e.g., ABC-12-DEF or ABC-123-DEF)
-REFERRAL_CODE_PATTERN = re.compile(r'^[A-Z]{3}-\d{2,3}-[A-Z]{3}$')
-
-# --- Ignored Words (all uppercase) ---
-# Common words, Reddit/game terms that are unlikely to be codes.
-# This list is crucial and might need tuning.
-IGNORED_WORDS_SET = {
-    "NEW", "CODE", "CODES", "REFERRAL"
-}
+# --- Configuration Loading Function ---
+def load_config(config_path="config.json"):
+    """Load configuration from JSON file."""
+    try:
+        config_file_path = os.path.join(
+            os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
+            config_path
+        )
+        
+        with open(config_file_path, 'r') as f:
+            config = json.load(f)
+            
+        # Validate required sections
+        required_sections = ['reddit', 'application', 'notifications', 'filtering', 'patterns']
+        for section in required_sections:
+            if section not in config:
+                raise ValueError(f"Missing required configuration section: {section}")
+                
+        return config
+        
+    except FileNotFoundError:
+        print(f"CRITICAL: Configuration file not found: {config_path}")
+        print("Please create a config.json file with the required settings.")
+        raise
+    except json.JSONDecodeError as e:
+        print(f"CRITICAL: Invalid JSON in configuration file: {e}")
+        raise
+    except Exception as e:
+        print(f"CRITICAL: Error loading configuration: {e}")
+        raise
 
 # Patterns for titles that suggest the code is in the post body
 # (used if no direct code found in title). Case-insensitive search.
@@ -129,39 +128,111 @@ def extract_potential_codes_from_text(text):
         potential_codes.append(word)
     return potential_codes
 
-def fetch_and_process_posts(notified_codes_set):
-    """Fetches new posts from Reddit, processes them based on flair, and notifies new codes."""
+def initialize_reddit_client():
+    """Initialize and return a Reddit client using PRAW."""
+    try:
+        reddit = praw.Reddit(
+            client_id=REDDIT_CLIENT_ID,
+            client_secret=REDDIT_CLIENT_SECRET,
+            user_agent=USER_AGENT,
+            read_only=True  # We only need read access
+        )
+        # Test the connection
+        reddit.auth.limits
+        logging.info("Reddit API client initialized successfully")
+        return reddit
+    except Exception as e:
+        logging.error(f"Failed to initialize Reddit client: {e}")
+        return None
+
+def fetch_and_process_posts_praw(notified_codes_set):
+    """Fetches new posts from Reddit using PRAW API."""
+    reddit = initialize_reddit_client()
+    if reddit is None:
+        logging.error("Cannot initialize Reddit client")
+        return None
+    
+    logging.info(f"Fetching new posts from r/{SUBREDDIT_NAME} using Reddit API...")
+    
+    try:
+        subreddit = reddit.subreddit(SUBREDDIT_NAME)
+        # Fetch new posts with the specified limit
+        posts = list(subreddit.new(limit=POST_LIMIT))
+        logging.info(f"Successfully fetched {len(posts)} posts from Reddit API")
+        return posts
+    except Exception as e:
+        logging.error(f"Error fetching Reddit data via API: {e}")
+        return None
+
+def fetch_and_process_posts_requests(notified_codes_set):
+    """Fallback method: Fetches new posts using direct JSON requests."""
+    import json
+    reddit_url = f"https://www.reddit.com/r/{SUBREDDIT_NAME}/new.json"
     headers = {'User-Agent': USER_AGENT}
     params = {'limit': POST_LIMIT}
     
-    logging.info(f"Fetching new posts from {REDDIT_URL}...")
+    logging.info(f"Fetching new posts from {reddit_url} using requests fallback...")
     try:
-        response = requests.get(REDDIT_URL, headers=headers, params=params, timeout=15)
+        response = requests.get(reddit_url, headers=headers, params=params, timeout=15)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching Reddit data: {e}")
-        return notified_codes_set
+        logging.error(f"Error fetching Reddit data via requests: {e}")
+        return None
 
     try:
         posts_data = response.json()
         if 'data' not in posts_data or 'children' not in posts_data['data']:
             logging.error("Reddit JSON data is not in the expected format.")
-            return notified_codes_set
+            return None
         posts = posts_data['data']['children']
+        logging.info(f"Successfully fetched {len(posts)} posts via requests fallback")
+        return posts
     except json.JSONDecodeError as e:
         logging.error(f"Error decoding Reddit JSON response: {e}")
-        return notified_codes_set
+        return None
+
+def fetch_and_process_posts(notified_codes_set):
+    """Fetches new posts from Reddit, processes them based on flair, and notifies new codes."""
+    posts = None
+    using_praw = False
+    
+    # Try PRAW first
+    praw_posts = fetch_and_process_posts_praw(notified_codes_set)
+    if praw_posts is not None:
+        posts = praw_posts
+        using_praw = True
+        logging.info("Using PRAW Reddit API")
+    else:
+        # Fallback to requests
+        logging.warning("PRAW failed, falling back to requests method")
+        requests_posts = fetch_and_process_posts_requests(notified_codes_set)
+        if requests_posts is not None:
+            posts = requests_posts
+            using_praw = False
+            logging.info("Using requests fallback method")
+        else:
+            logging.error("Both PRAW and requests methods failed")
+            return notified_codes_set
 
     all_potential_codes_this_run = []
     processed_post_count = 0
 
-    for post_entry in posts:
-        if post_entry.get('kind') != 't3':
-            continue
-        post = post_entry.get('data', {})
-        post_id = post.get('id', 'N/A')
-        title = post.get('title', '')
-        flair = post.get('link_flair_text') # Can be None
+    for post_item in posts:
+        if using_praw:
+            # PRAW submission object
+            post_id = post_item.id
+            title = post_item.title
+            flair = post_item.link_flair_text  # Can be None
+            selftext = post_item.selftext if post_item.selftext else ''
+        else:
+            # Requests JSON data
+            if post_item.get('kind') != 't3':
+                continue
+            post_data = post_item.get('data', {})
+            post_id = post_data.get('id', 'N/A')
+            title = post_data.get('title', '')
+            flair = post_data.get('link_flair_text')  # Can be None
+            selftext = post_data.get('selftext', '')
 
         # --- FLAIR FILTERING LOGIC ---
         if flair not in ALLOWED_FLAIRS:
@@ -171,7 +242,6 @@ def fetch_and_process_posts(notified_codes_set):
         #logging.info(f"Processing Post ID: {post_id} with flair '{flair}', Title: '{title[:50]}...'")
         processed_post_count += 1
         
-        selftext = post.get('selftext', '')
         current_post_extracted_codes = []
         
         # 1. Try to extract codes directly from the title
@@ -237,8 +307,9 @@ def fetch_and_process_posts(notified_codes_set):
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    logging.info("Tacticus Code Scraper started.")
+    logging.info("Tacticus Code Scraper started (using Reddit API via PRAW).")
     logging.info(f"Filtering for flairs: {ALLOWED_FLAIRS}")
+    logging.info(f"Target subreddit: r/{SUBREDDIT_NAME}")
     
     try:
         with open(CODES_FILE, 'a'):
