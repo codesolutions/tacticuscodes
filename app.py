@@ -43,6 +43,66 @@ def load_config(config_path="config.json"):
         print(f"CRITICAL: Error loading configuration: {e}")
         raise
 
+# --- Initial Logging Setup (basic console logging) ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]  # Start with console only
+)
+
+# --- Load Configuration ---
+config = load_config()
+logging.info("Configuration loaded successfully")
+
+# --- Configuration Variables ---
+# Reddit API Configuration
+REDDIT_CLIENT_ID = config['reddit']['client_id']
+REDDIT_CLIENT_SECRET = config['reddit']['client_secret']
+SUBREDDIT_NAME = config['reddit']['subreddit']
+USER_AGENT = config['reddit']['user_agent']
+
+# Application Configuration
+FETCH_INTERVAL_SECONDS = config['application']['fetch_interval_seconds']
+POST_LIMIT = config['application']['post_limit']
+
+# File paths
+CODES_FILE = os.path.join(
+    os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
+    config['application']['codes_file']
+)
+LOG_FILE = os.path.join(
+    os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
+    config['application']['log_file']
+)
+
+# Notification Configuration
+NTFY_TOPIC_URL = config['notifications']['ntfy_topic_url']
+
+# --- Reddit Flair Filtering ---
+ALLOWED_FLAIRS = set(config['filtering']['allowed_flairs'])
+
+# --- Patterns ---
+CANDIDATE_CODE_PATTERN = re.compile(config['patterns']['candidate_code_pattern'])
+REFERRAL_CODE_PATTERN = re.compile(config['patterns']['referral_code_pattern'])
+
+# --- Ignored Words ---
+IGNORED_WORDS_SET = set(config['filtering']['ignored_words'])
+
+# --- Proper Logging Setup (with file logging) ---
+# Clear existing handlers and set up new ones with the loaded config
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler()
+    ],
+    force=True
+)
+
 # Patterns for titles that suggest the code is in the post body
 # (used if no direct code found in title). Case-insensitive search.
 BODY_HINT_PATTERNS = [
@@ -57,16 +117,6 @@ BODY_HINT_PATTERNS = [
     re.compile(r"^\s*title\s*(says|has)\s*it\s*all\s*$", re.IGNORECASE), # If title is generic but implies content is key
     re.compile(r"^\s*look\s*inside\s*$", re.IGNORECASE)
 ]
-
-# --- Logging Setup ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler()
-    ]
-)
 
 # --- Functions ---
 
