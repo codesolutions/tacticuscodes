@@ -149,7 +149,7 @@ def notify_ntfy(message, topic_url=NTFY_TOPIC_URL):
         logging.info(f"Attempting to notify: {message} to {topic_url}")
         response = requests.post(topic_url, data=message.encode('utf-8'), headers={'Title': 'New Tacticus Code!'})
         
-        subprocess.run(['/usr/bin/notify-send', "New Tacticus Code", message], check=True, capture_output=True)
+        #subprocess.run(['/usr/bin/notify-send', "New Tacticus Code", message], check=True, capture_output=True)
 
         response.raise_for_status()
         logging.info(f"Successfully notified: {message} via ntfy.sh. Status: {response.status_code}")
